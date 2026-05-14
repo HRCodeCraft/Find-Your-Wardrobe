@@ -32,40 +32,46 @@ export default function Home() {
     setIsAnalyzing(true);
     setError(null);
 
-    try {
-      const results = await Promise.all(
-        files.map(async (file) => {
-          const base64 = await fileToBase64(file);
-          const imageUrl = URL.createObjectURL(file);
+    const settled = await Promise.allSettled(
+      files.map(async (file) => {
+        const base64 = await fileToBase64(file);
+        const imageUrl = URL.createObjectURL(file);
 
-          const res = await fetch("/api/analyze-clothing", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ imageBase64: base64, mimeType: file.type }),
-          });
+        const res = await fetch("/api/analyze-clothing", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageBase64: base64, mimeType: file.type }),
+        });
 
-          if (!res.ok) throw new Error("Analysis failed");
-          const data = await res.json();
+        if (!res.ok) {
+          URL.revokeObjectURL(imageUrl);
+          throw new Error("Analysis failed");
+        }
+        const data = await res.json();
 
-          const item: ClothingItem = {
-            id: uuidv4(),
-            imageUrl,
-            imageMimeType: file.type,
-            category: data.category ?? "top",
-            color: data.color ?? "unknown",
-            description: data.description ?? file.name,
-            tags: data.tags ?? [],
-          };
-          return item;
-        })
-      );
+        const item: ClothingItem = {
+          id: uuidv4(),
+          imageUrl,
+          imageMimeType: file.type,
+          category: data.category ?? "top",
+          color: data.color ?? "unknown",
+          description: data.description ?? file.name,
+          tags: data.tags ?? [],
+        };
+        return item;
+      })
+    );
 
-      setClothes((prev) => [...prev, ...results]);
-    } catch {
-      setError("Kuch kapde analyze nahi ho sake. Please retry karo.");
-    } finally {
-      setIsAnalyzing(false);
-    }
+    const succeeded = settled
+      .filter((r): r is PromiseFulfilledResult<ClothingItem> => r.status === "fulfilled")
+      .map((r) => r.value);
+
+    const failCount = settled.filter((r) => r.status === "rejected").length;
+
+    if (succeeded.length > 0) setClothes((prev) => [...prev, ...succeeded]);
+    if (failCount > 0) setError(`${failCount} photo(s) analyze nahi ho saki. Baaki add ho gayi.`);
+
+    setIsAnalyzing(false);
   }
 
   async function handleGetOutfit() {
@@ -92,7 +98,11 @@ export default function Home() {
   }
 
   function removeClothingItem(id: string) {
-    setClothes((prev) => prev.filter((c) => c.id !== id));
+    setClothes((prev) => {
+      const item = prev.find((c) => c.id === id);
+      if (item) URL.revokeObjectURL(item.imageUrl);
+      return prev.filter((c) => c.id !== id);
+    });
     setSuggestion(null);
   }
 
@@ -154,7 +164,7 @@ export default function Home() {
               </h2>
               <button
                 onClick={() => {
-                  setClothes([]);
+                  setClothes((prev) => { prev.forEach((c) => URL.revokeObjectURL(c.imageUrl)); return []; });
                   setSuggestion(null);
                 }}
                 className="text-xs text-red-400 hover:text-red-600 transition-colors"
